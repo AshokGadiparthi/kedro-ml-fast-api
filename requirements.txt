@@ -1,0 +1,29 @@
+fastapi==0.104.1
+uvicorn==0.24.0
+celery==5.3.4
+redis==5.0.1
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+
+# Database
+sqlalchemy>=2.0.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Security
+cryptography>=40.0.0
+PyJWT>=2.6.0
+passlib>=1.7.0
+
+# Configuration
+python-dotenv>=1.0.0
+
+# HTTP client
+requests>=2.31.0
+
+# MySQL Support
+PyMySQL>=1.1.0
+mysql-connector-python>=8.0.0

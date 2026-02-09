@@ -1,0 +1,543 @@
+"""
+Job Manager - 100% WORKING
+Creates ALL required tables on initialization
+Backward compatible - old functionality preserved
+"""
+
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+import logging
+import json
+import uuid
+
+logger = logging.getLogger(__name__)
+
+DB_PATH = Path.cwd() / "ml_platform.db"
+
+
+class JobManager:
+    """Complete database management - ALL tables created automatically"""
+    
+    def __init__(self):
+        self.db_path = DB_PATH
+        self._init_db()
+    
+    def _init_db(self):
+        """Initialize database with ALL required tables"""
+        try:
+            # Ensure directory exists
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with sqlite3.connect(str(self.db_path)) as conn:
+                logger.info("✅ Creating database tables...")
+                
+                # 1. USERS TABLE
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS users (
+                        id TEXT PRIMARY KEY,
+                        username TEXT UNIQUE NOT NULL,
+                        email TEXT,
+                        full_name TEXT,
+                        password_hash TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP
+                    )
+                ''')
+                logger.info("✅ Users table created")
+                
+                # 2. PROJECTS TABLE
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS projects (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT,
+                        owner_id TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP,
+                        FOREIGN KEY (owner_id) REFERENCES users(id)
+                    )
+                ''')
+                logger.info("✅ Projects table created")
+                
+                # 3. DATASETS TABLE
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS datasets (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        project_id TEXT NOT NULL,
+                        description TEXT,
+                        file_path TEXT,
+                        file_size INTEGER,
+                        row_count INTEGER,
+                        column_count INTEGER,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP,
+                        FOREIGN KEY (project_id) REFERENCES projects(id)
+                    )
+                ''')
+                logger.info("✅ Datasets table created")
+                
+                # 4. DATASOURCES TABLE
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS datasources (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        type TEXT,
+                        connection_string TEXT,
+                        configuration TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP
+                    )
+                ''')
+                logger.info("✅ Datasources table created")
+                
+                # 5. MODELS TABLE
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS models (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        project_id TEXT NOT NULL,
+                        model_type TEXT,
+                        description TEXT,
+                        version TEXT,
+                        file_path TEXT,
+                        accuracy REAL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP,
+                        FOREIGN KEY (project_id) REFERENCES projects(id)
+                    )
+                ''')
+                logger.info("✅ Models table created")
+                
+                # 6. ACTIVITIES TABLE
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS activities (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        action TEXT NOT NULL,
+                        entity_type TEXT NOT NULL,
+                        entity_id TEXT NOT NULL,
+                        details TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (user_id) REFERENCES users(id)
+                    )
+                ''')
+                logger.info("✅ Activities table created")
+                
+                # 7. JOBS TABLE (Core table)
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS jobs (
+                        id TEXT PRIMARY KEY,
+                        pipeline_name TEXT NOT NULL,
+                        user_id TEXT,
+                        status TEXT DEFAULT 'pending',
+                        parameters TEXT,
+                        results TEXT,
+                        error_message TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        started_at TIMESTAMP,
+                        completed_at TIMESTAMP,
+                        execution_time REAL
+                    )
+                ''')
+                logger.info("✅ Jobs table created")
+                
+                # 8. EDA_ANALYSES TABLE
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS eda_analyses (
+                        id TEXT PRIMARY KEY,
+                        dataset_id TEXT NOT NULL,
+                        analysis_type TEXT,
+                        phase TEXT,
+                        results TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (dataset_id) REFERENCES datasets(id)
+                    )
+                ''')
+                logger.info("✅ EDA Analyses table created")
+                
+                # 9. PIPELINE_RUNS TABLE
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS pipeline_runs (
+                        id TEXT PRIMARY KEY,
+                        job_id TEXT NOT NULL,
+                        pipeline_name TEXT NOT NULL,
+                        status TEXT DEFAULT 'pending',
+                        output TEXT,
+                        error TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP,
+                        FOREIGN KEY (job_id) REFERENCES jobs(id)
+                    )
+                ''')
+                logger.info("✅ Pipeline Runs table created")
+                
+                conn.commit()
+            
+            logger.info(f"✅ ALL TABLES initialized successfully at: {self.db_path}")
+            self._log_tables()
+        except Exception as e:
+            logger.error(f"❌ Database initialization error: {e}")
+            raise
+    
+    def _log_tables(self):
+        """Log all created tables for verification"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                cursor = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+                )
+                tables = [t[0] for t in cursor.fetchall()]
+                logger.info(f"✅ Created tables ({len(tables)}): {', '.join(tables)}")
+        except Exception as e:
+            logger.error(f"Error logging tables: {e}")
+    
+    # ========================================================================
+    # JOB OPERATIONS (Old functionality - preserved)
+    # ========================================================================
+    
+    def create_job(self, pipeline_name: str, user_id: str = None, parameters: dict = None) -> dict:
+        """Create a new job record"""
+        job_id = str(uuid.uuid4())
+        
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute('''
+                    INSERT INTO jobs 
+                    (id, pipeline_name, user_id, parameters, status)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    job_id,
+                    pipeline_name,
+                    user_id or "anonymous",
+                    json.dumps(parameters) if parameters else "{}",
+                    "pending"
+                ))
+                conn.commit()
+            
+            logger.info(f"✅ Job created: {job_id}")
+            return self.get_job(job_id)
+        except Exception as e:
+            logger.error(f"❌ Error creating job: {e}")
+            raise
+    
+    def get_job(self, job_id: str) -> dict:
+        """Get job details"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute('SELECT * FROM jobs WHERE id = ?', (job_id,))
+                row = cursor.fetchone()
+            
+            if not row:
+                return None
+            
+            return {
+                'id': row['id'],
+                'pipeline_name': row['pipeline_name'],
+                'user_id': row['user_id'],
+                'status': row['status'],
+                'parameters': json.loads(row['parameters']),
+                'results': json.loads(row['results']) if row['results'] else None,
+                'error_message': row['error_message'],
+                'created_at': row['created_at'],
+                'started_at': row['started_at'],
+                'completed_at': row['completed_at'],
+                'execution_time': row['execution_time']
+            }
+        except Exception as e:
+            logger.error(f"❌ Error getting job: {e}")
+            raise
+    
+    def update_job_status(self, job_id: str, status: str):
+        """Update job status"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute('UPDATE jobs SET status = ? WHERE id = ?', (status, job_id))
+                conn.commit()
+            logger.info(f"✅ Job {job_id} status: {status}")
+        except Exception as e:
+            logger.error(f"❌ Error updating job status: {e}")
+            raise
+    
+    def update_job_results(self, job_id: str, results: dict):
+        """Update job results"""
+        now = datetime.utcnow().isoformat()
+        
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute(
+                    'UPDATE jobs SET results = ?, completed_at = ? WHERE id = ?',
+                    (json.dumps(results), now, job_id)
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"❌ Error updating results: {e}")
+            raise
+    
+    def update_job_error(self, job_id: str, error: str):
+        """Update job error"""
+        now = datetime.utcnow().isoformat()
+        
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute(
+                    'UPDATE jobs SET error_message = ?, completed_at = ? WHERE id = ?',
+                    (error, now, job_id)
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"❌ Error updating error: {e}")
+            raise
+    
+    def list_jobs(self, limit: int = 50):
+        """List recent jobs"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    'SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?',
+                    (limit,)
+                )
+                rows = cursor.fetchall()
+            
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"❌ Error listing jobs: {e}")
+            raise
+    
+    # ========================================================================
+    # USER OPERATIONS
+    # ========================================================================
+    
+    def create_user(self, username: str, email: str = None, full_name: str = None) -> dict:
+        """Create a new user"""
+        user_id = str(uuid.uuid4())
+        
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute('''
+                    INSERT INTO users (id, username, email, full_name)
+                    VALUES (?, ?, ?, ?)
+                ''', (user_id, username, email, full_name))
+                conn.commit()
+            
+            logger.info(f"✅ User created: {user_id}")
+            return self.get_user(user_id)
+        except Exception as e:
+            logger.error(f"❌ Error creating user: {e}")
+            raise
+    
+    def get_user(self, user_id: str):
+        """Get user details"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,))
+                row = cursor.fetchone()
+            
+            return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"❌ Error getting user: {e}")
+            raise
+    
+    # ========================================================================
+    # PROJECT OPERATIONS
+    # ========================================================================
+    
+    def create_project(self, name: str, owner_id: str, description: str = None) -> dict:
+        """Create a new project"""
+        project_id = str(uuid.uuid4())
+        
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute('''
+                    INSERT INTO projects (id, name, owner_id, description)
+                    VALUES (?, ?, ?, ?)
+                ''', (project_id, name, owner_id, description))
+                conn.commit()
+            
+            logger.info(f"✅ Project created: {project_id}")
+            return self.get_project(project_id)
+        except Exception as e:
+            logger.error(f"❌ Error creating project: {e}")
+            raise
+    
+    def get_project(self, project_id: str):
+        """Get project details"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute('SELECT * FROM projects WHERE id = ?', (project_id,))
+                row = cursor.fetchone()
+            
+            return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"❌ Error getting project: {e}")
+            raise
+    
+    def list_projects(self, limit: int = 50):
+        """List projects"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute('SELECT * FROM projects ORDER BY created_at DESC LIMIT ?', (limit,))
+                rows = cursor.fetchall()
+            
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"❌ Error listing projects: {e}")
+            raise
+    
+    # ========================================================================
+    # DATASET OPERATIONS
+    # ========================================================================
+    
+    def create_dataset(self, name: str, project_id: str, description: str = None) -> dict:
+        """Create a new dataset"""
+        dataset_id = str(uuid.uuid4())
+        
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute('''
+                    INSERT INTO datasets (id, name, project_id, description)
+                    VALUES (?, ?, ?, ?)
+                ''', (dataset_id, name, project_id, description))
+                conn.commit()
+            
+            logger.info(f"✅ Dataset created: {dataset_id}")
+            return self.get_dataset(dataset_id)
+        except Exception as e:
+            logger.error(f"❌ Error creating dataset: {e}")
+            raise
+    
+    def get_dataset(self, dataset_id: str):
+        """Get dataset details"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute('SELECT * FROM datasets WHERE id = ?', (dataset_id,))
+                row = cursor.fetchone()
+            
+            return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"❌ Error getting dataset: {e}")
+            raise
+    
+    def list_datasets(self, limit: int = 50):
+        """List datasets"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute('SELECT * FROM datasets ORDER BY created_at DESC LIMIT ?', (limit,))
+                rows = cursor.fetchall()
+            
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"❌ Error listing datasets: {e}")
+            raise
+    
+    # ========================================================================
+    # MODEL OPERATIONS
+    # ========================================================================
+    
+    def create_model(self, name: str, project_id: str, model_type: str, description: str = None) -> dict:
+        """Create a new model"""
+        model_id = str(uuid.uuid4())
+        
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute('''
+                    INSERT INTO models (id, name, project_id, model_type, description)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (model_id, name, project_id, model_type, description))
+                conn.commit()
+            
+            logger.info(f"✅ Model created: {model_id}")
+            return self.get_model(model_id)
+        except Exception as e:
+            logger.error(f"❌ Error creating model: {e}")
+            raise
+    
+    def get_model(self, model_id: str):
+        """Get model details"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute('SELECT * FROM models WHERE id = ?', (model_id,))
+                row = cursor.fetchone()
+            
+            return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"❌ Error getting model: {e}")
+            raise
+    
+    def list_models(self, limit: int = 50):
+        """List models"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute('SELECT * FROM models ORDER BY created_at DESC LIMIT ?', (limit,))
+                rows = cursor.fetchall()
+            
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"❌ Error listing models: {e}")
+            raise
+    
+    # ========================================================================
+    # ACTIVITY OPERATIONS
+    # ========================================================================
+    
+    def create_activity(self, user_id: str, action: str, entity_type: str, entity_id: str, details: dict = None) -> dict:
+        """Create a new activity"""
+        activity_id = str(uuid.uuid4())
+        
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute('''
+                    INSERT INTO activities (id, user_id, action, entity_type, entity_id, details)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (activity_id, user_id, action, entity_type, entity_id, json.dumps(details) if details else None))
+                conn.commit()
+            
+            logger.info(f"✅ Activity created: {activity_id}")
+            return self.get_activity(activity_id)
+        except Exception as e:
+            logger.error(f"❌ Error creating activity: {e}")
+            raise
+    
+    def get_activity(self, activity_id: str):
+        """Get activity details"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute('SELECT * FROM activities WHERE id = ?', (activity_id,))
+                row = cursor.fetchone()
+            
+            if not row:
+                return None
+            
+            data = dict(row)
+            data['details'] = json.loads(data['details']) if data['details'] else None
+            return data
+        except Exception as e:
+            logger.error(f"❌ Error getting activity: {e}")
+            raise
+    
+    def list_activities(self, limit: int = 50):
+        """List activities"""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    'SELECT * FROM activities ORDER BY created_at DESC LIMIT ?',
+                    (limit,)
+                )
+                rows = cursor.fetchall()
+            
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"❌ Error listing activities: {e}")
+            raise
